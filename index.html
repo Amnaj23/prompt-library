@@ -368,6 +368,12 @@ button { cursor: pointer; }
     }).join("");
     Array.prototype.forEach.call(wall.querySelectorAll(".card"), function (c) {
       var id = c.getAttribute("data-id");
+      var vid = c.querySelector(".media video");
+      if (vid) {
+        vid.muted = true; vid.loop = true;
+        c.addEventListener("mouseenter", function () { var pr = vid.play(); if (pr && pr.catch) pr.catch(function () {}); });
+        c.addEventListener("mouseleave", function () { vid.pause(); try { vid.currentTime = 0; } catch (e) {} });
+      }
       c.addEventListener("click", function (e) {
         if (e.target.closest(".gpt-btn, .gem-btn")) { e.stopPropagation(); copyText(byId(id).prompt); return; }
         var cp = e.target.closest("[data-copy]");
