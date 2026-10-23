@@ -223,12 +223,21 @@ button { cursor: pointer; }
     try { localStorage.setItem(LS_KEY, JSON.stringify({ prompts: state.prompts, cats: state.cats })); }
     catch (e) { toast("พื้นที่เก็บในเบราว์เซอร์เต็ม ลองลบ prompt เก่าหรือใช้รูปที่เล็กลง"); }
   }
-  function sortPrompts() { state.prompts.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); }); }
+  function lastTs(p) { return Math.max(p.updatedAt || 0, p.createdAt || 0); }
+  function sortPrompts() { state.prompts.sort(function (a, b) { return lastTs(b) - lastTs(a); }); }
   var store = {
     addCat: function (name) {
       if (fbMode) return fbDb.collection("categories").add({ name: name, createdAt: Date.now() }).then(function (r) { return r.id; });
       if (!local) return dbx.collection("categories").add({ name: name, createdAt: Date.now() }).then(function (r) { return r.id; });
       var id = "c" + Date.now(); state.cats.push({ id: id, name: name, createdAt: Date.now() }); persist(); renderTabs(); renderWall(); return Promise.resolve(id);
+    },
+    renameCat: function (id, name) {
+      var cur = state.cats.filter(function (c) { return c.id === id; })[0];
+      var data = { name: name, createdAt: (cur && cur.createdAt) || Date.now() };
+      if (fbMode) return fbDb.collection("categories").doc(id).set(data, { merge: true });
+      if (!local) return dbx.doc("categories/" + id).set(data);
+      if (cur) cur.name = name; else state.cats.push({ id: id, name: name, createdAt: data.createdAt });
+      persist(); renderTabs(); renderWall(); return Promise.resolve();
     },
     savePrompt: function (id, data) {
       if (fbMode) { var fref = id ? fbDb.collection("prompts").doc(id) : fbDb.collection("prompts").doc(); return fref.set(data); }
@@ -284,7 +293,11 @@ button { cursor: pointer; }
     if (p.category !== "video") return "";
     return '<a class="gem-btn" href="https://gemini.google.com/app" target="_blank" rel="noopener noreferrer" title="คัดลอก prompt แล้วเปิด Gemini เพื่อเจนคลิป"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 0C12.6 6.7 17.3 11.4 24 12c-6.7.6-11.4 5.3-12 12-.6-6.7-5.3-11.4-12-12 6.7-.6 11.4-5.3 12-12z"/></svg><span>เจนคลิป</span></a>';
   }
-  function allCats() { return BUILTIN.concat(state.cats.map(function (c) { return { id: c.id, name: c.name }; })); }
+  function allCats() {
+    var over = {}, extra = [];
+    state.cats.forEach(function (c) { if (BUILTIN.some(function (b) { return b.id === c.id; })) over[c.id] = c.name; else extra.push({ id: c.id, name: c.name }); });
+    return BUILTIN.map(function (b) { return { id: b.id, name: over[b.id] || b.name }; }).concat(extra);
+  }
   function catName(id) { var c = allCats().filter(function (x) { return x.id === id; })[0]; return c ? c.name : "ไม่ระบุหมวด"; }
   function hue(str) { var h = 0; for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360; return h; }
   function driveUrl(u) {
@@ -339,11 +352,27 @@ button { cursor: pointer; }
     html += tab("all", "ทั้งหมด", state.prompts.length);
     allCats().forEach(function (c) { html += tab(c.id, c.name, state.prompts.filter(function (p) { return p.category === c.id; }).length); });
     if (state.canWrite) html += '<button class="tab add" type="button" id="addCat">+ หมวดใหม่</button>';
+    if (state.canWrite && state.active !== "all") html += '<button class="tab add" type="button" id="renCat">✎ แก้ชื่อหมวด</button>';
     tabs.innerHTML = html;
     Array.prototype.forEach.call(tabs.querySelectorAll("[data-cat]"), function (b) {
       b.addEventListener("click", function () { state.active = b.getAttribute("data-cat"); renderTabs(); renderWall(); });
     });
     var ac = $("addCat"); if (ac) ac.addEventListener("click", showCatForm);
+    var rc = $("renCat"); if (rc) rc.addEventListener("click", showRenameForm);
+  }
+
+  function showRenameForm() {
+    var rc = $("renCat"); if (!rc) return;
+    var id = state.active, cur = catName(id);
+    var f = document.createElement("form"); f.className = "catform";
+    f.innerHTML = '<input id="renName" type="text" maxlength="40" aria-label="ชื่อหมวดใหม่"><button class="btn primary" type="submit">บันทึก</button>';
+    rc.replaceWith(f); var inp = $("renName"); inp.value = cur; inp.focus(); inp.select();
+    f.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var name = inp.value.trim(); if (!name || name === cur) { renderTabs(); return; }
+      store.renameCat(id, name).then(function () { renderTabs(); renderWall(); toast("เปลี่ยนชื่อหมวดเป็น " + name + " แล้ว"); }, function () { toast("เปลี่ยนชื่อหมวดไม่สำเร็จ"); renderTabs(); });
+    });
+    inp.addEventListener("keydown", function (e) { if (e.key === "Escape") renderTabs(); });
   }
 
   function showCatForm() {
@@ -670,7 +699,7 @@ button { cursor: pointer; }
       var done = function (v) { state.canWrite = v !== false; $("addBtn").hidden = !state.canWrite; renderTabs(); renderWall(); };
       Promise.resolve(cw).then(done, function () { done(null); });
       dbx.collection("prompts").onSnapshot(function (snap) {
-        state.prompts = snap.docs.map(function (d) { var o = Object.assign({}, d.data()); o.id = d.id; return o; }).sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+        state.prompts = snap.docs.map(function (d) { var o = Object.assign({}, d.data()); o.id = d.id; return o; }); sortPrompts();
         state.loaded = true; renderTabs(); renderWall();
       }, function () { state.loaded = true; renderWall(); });
       dbx.collection("categories").onSnapshot(function (snap) {
