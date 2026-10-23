@@ -93,8 +93,9 @@ button { cursor: pointer; }
 .catform input:focus { outline: none; }
 
 /* masonry wall */
-.wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; align-items: start; padding-top: 22px; }
-.card { box-shadow: 0 2px 10px rgba(120, 50, 20, .10); position: relative; margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; cursor: pointer; display: block; width: 100%; text-align: left; padding: 0; transition: border-color .15s, transform .15s; }
+.wall { position: relative; margin-top: 22px; }
+.wall .card { position: absolute; }
+.card { box-shadow: 0 2px 10px rgba(120, 50, 20, .10); margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; cursor: pointer; display: block; width: 100%; text-align: left; padding: 0; transition: border-color .15s, transform .15s; }
 .card:hover { border-color: var(--accent); transform: translateY(-3px); box-shadow: 0 0 0 1px var(--accent), 0 8px 28px var(--glow), 0 0 22px rgba(255, 190, 90, .35); }
 .card::before { content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0; background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, .38) 48%, rgba(255, 240, 200, .5) 52%, transparent 65%); transform: translateX(-120%); }
 .card:hover::before { opacity: 1; animation: shine .9s ease-out 1; }
@@ -400,13 +401,33 @@ button { cursor: pointer; }
     $("catName").addEventListener("keydown", function (e) { if (e.key === "Escape") renderTabs(); });
   }
 
+  var GAP = 16, MINW = 250, layoutQueued = false, wallRO = null;
+  function layoutWall() {
+    var wall = $("wall"); var cards = wall.querySelectorAll(".card");
+    var W = wall.clientWidth; if (!W) return;
+    var cols = Math.max(1, Math.floor((W + GAP) / (MINW + GAP)));
+    var cw = (W - GAP * (cols - 1)) / cols, hs = [], i;
+    for (i = 0; i < cols; i++) hs.push(0);
+    Array.prototype.forEach.call(cards, function (c) {
+      c.style.width = cw + "px";
+      var k = 0; for (i = 1; i < cols; i++) if (hs[i] < hs[k] - 0.5) k = i;
+      c.style.left = k * (cw + GAP) + "px"; c.style.top = hs[k] + "px";
+      hs[k] += c.offsetHeight + GAP;
+    });
+    wall.style.height = Math.max.apply(null, hs.concat([GAP])) - GAP + "px";
+  }
+  function queueLayout() { if (layoutQueued) return; layoutQueued = true; requestAnimationFrame(function () { layoutQueued = false; layoutWall(); }); }
+  window.addEventListener("resize", queueLayout);
+  document.addEventListener("load", queueLayout, true);
+  document.addEventListener("loadedmetadata", queueLayout, true);
+  if (window.ResizeObserver) { wallRO = new ResizeObserver(queueLayout); }
   function renderWall() {
     var list = visible(); var wall = $("wall"); var empty = $("empty");
     $("count").textContent = state.prompts.length + " prompt" + (local && state.admin ? " · โหมดแอดมิน เก็บในเครื่องนี้" : "");
-    if (!state.loaded) { wall.innerHTML = ""; empty.hidden = false; empty.innerHTML = "<h2>กำลังโหลด prompt</h2>"; return; }
-    if (state.error && !state.prompts.length) { wall.innerHTML = ""; empty.hidden = false; empty.innerHTML = "<h2>เชื่อมต่อฐานข้อมูลไม่ได้</h2><p>ลองรีเฟรชหน้านี้อีกครั้ง ถ้ายังไม่ได้ ให้ตรวจว่าสร้าง Firestore และตั้งกฎแล้ว</p>"; return; }
+    if (!state.loaded) { wall.innerHTML = ""; wall.style.height = "0"; empty.hidden = false; empty.innerHTML = "<h2>กำลังโหลด prompt</h2>"; return; }
+    if (state.error && !state.prompts.length) { wall.innerHTML = ""; wall.style.height = "0"; empty.hidden = false; empty.innerHTML = "<h2>เชื่อมต่อฐานข้อมูลไม่ได้</h2><p>ลองรีเฟรชหน้านี้อีกครั้ง ถ้ายังไม่ได้ ให้ตรวจว่าสร้าง Firestore และตั้งกฎแล้ว</p>"; return; }
     if (!list.length) {
-      wall.innerHTML = ""; empty.hidden = false;
+      wall.innerHTML = ""; wall.style.height = "0"; empty.hidden = false;
       var any = state.prompts.length > 0;
       empty.innerHTML = any ? "<h2>ไม่พบ prompt ที่ตรงกัน</h2><p>ลองเปลี่ยนคำค้นหา หรือเลือกหมวดอื่น</p>" : "<h2>ยังไม่มี prompt</h2><p>" + (state.canWrite ? "กด “เพิ่ม Prompt” เพื่อใส่รูปตัวอย่างพร้อมข้อความ prompt อันแรก" : "เมื่อมีคนเพิ่ม prompt จะแสดงที่นี่") + "</p>";
       return;
@@ -417,6 +438,8 @@ button { cursor: pointer; }
       var tool = p.tool ? '<span class="chip tool">' + esc(p.tool) + "</span>" : "";
       return '<div class="card" role="button" tabindex="0" data-id="' + esc(p.id) + '"><div class="media">' + mediaHTML(p) + '<span class="badge">' + esc(catName(p.category)) + '</span><div class="fabs"><button type="button" class="copy-fab" data-copy="' + esc(p.id) + '">คัดลอก</button>' + gptLink(p) + geminiLink(p) + '</div></div><div class="body"><h3 class="ctitle">' + esc(p.title) + '</h3><p class="cprompt">' + esc(p.prompt) + '</p><div class="chips">' + tool + tags + "</div></div></div>";
     }).join("");
+    layoutWall();
+    if (wallRO) { wallRO.disconnect(); wallRO.observe(wall); Array.prototype.forEach.call(wall.querySelectorAll(".card"), function (c) { wallRO.observe(c); }); }
     Array.prototype.forEach.call(wall.querySelectorAll(".card"), function (c) {
       var id = c.getAttribute("data-id");
       var vid = c.querySelector(".media video");
